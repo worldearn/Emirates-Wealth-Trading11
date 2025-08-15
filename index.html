@@ -132,6 +132,11 @@
             background: linear-gradient(135deg, #6c757d, #495057);
         }
         
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 0.8rem;
+        }
+        
         .text-center {
             text-align: center;
         }
@@ -178,6 +183,11 @@
             border-radius: 20px;
             font-size: 0.8rem;
             font-weight: bold;
+        }
+        
+        .vip-level {
+            font-size: 0.7rem;
+            margin-top: 3px;
         }
         
         .balance-card {
@@ -269,6 +279,10 @@
         
         .withdraw {
             color: var(--danger);
+        }
+        
+        .bonus {
+            color: var(--warning);
         }
         
         .transaction-date {
@@ -604,6 +618,9 @@
                     <div class="form-group">
                         <input type="password" class="form-control" id="signup-confirm-password" placeholder="Confirm Password" required>
                     </div>
+                    <div class="form-group">
+                        <input type="text" class="form-control" id="signup-referral" placeholder="Referral Code (Optional)">
+                    </div>
                     <button type="submit" class="btn">Sign Up</button>
                 </form>
                 <p class="text-center mt-3">Already have an account? <a href="#" class="link" id="show-login">Login</a></p>
@@ -616,9 +633,12 @@
             <div class="user-info">
                 <div>
                     <div class="user-name" id="dashboard-username">Loading...</div>
-                    <div id="dashboard-vip-badge" class="vip-badge" style="display: none;">VIP</div>
+                    <div id="dashboard-vip-badge" style="display: none;">
+                        <span class="vip-badge">VIP</span>
+                        <span class="vip-level" id="vip-level">Level 0</span>
+                    </div>
                 </div>
-                <a href="#" id="logout-btn" class="btn btn-secondary" style="padding: 8px 12px; font-size: 0.8rem;">Logout</a>
+                <a href="#" id="logout-btn" class="btn btn-secondary btn-small">Logout</a>
             </div>
             
             <div class="balance-card">
@@ -919,7 +939,7 @@
                 
                 <h3 class="about-title">Contact Us</h3>
                 <p>Email: support@emirateswealth.com</p>
-                <p>Telegram: @EmiratesWealthSupport</p>
+                <p>Telegram: @Emirateswealthsupport</p>
                 <p>Phone: +1 (555) 123-4567</p>
             </div>
         </div>
@@ -956,11 +976,20 @@
         // Payment addresses
         const paymentAddresses = {
             TRC20: [
-                'TFXtR9SRtUFjxHTDUTW3MCah3um8qxDwFt (Nabin Khanal)',
-                'TXoWzutmFoaXhr8g7KUoc3QXZegpQHzsfe (Nabin Khanal)'
+                'TFXtR9SRtUFjxHTDUTW3MCah3um8qxDwFt ',
+                'TXoWzutmFoaXhr8g7KUoc3QXZegpQHzsfe '
             ],
             ERC20: '0xeB00d52BB61b059878930997a26b53722A62326c'
         };
+        
+        // VIP levels
+        const vipLevels = [
+            { name: "VIP 1", minAmount: 100, bonus: 0.05 },
+            { name: "VIP 2", minAmount: 500, bonus: 0.10 },
+            { name: "VIP 3", minAmount: 1000, bonus: 0.15 },
+            { name: "VIP 4", minAmount: 2000, bonus: 0.20 },
+            { name: "VIP 5", minAmount: 5000, bonus: 0.25 }
+        ];
         
         // Initialize app data
         let appData = {
@@ -969,7 +998,8 @@
             usedDepositCodes: [],
             usedWithdrawCodes: [],
             transactions: [],
-            investments: []
+            investments: [],
+            lastDailyPayout: null
         };
         
         // DOM Elements
@@ -984,6 +1014,20 @@
             const savedData = localStorage.getItem('emiratesWealthData');
             if (savedData) {
                 appData = JSON.parse(savedData);
+                
+                // Convert string dates back to Date objects
+                if (appData.lastDailyPayout && typeof appData.lastDailyPayout === 'string') {
+                    appData.lastDailyPayout = new Date(appData.lastDailyPayout);
+                }
+                
+                appData.transactions.forEach(t => {
+                    if (typeof t.date === 'string') t.date = new Date(t.date);
+                });
+                
+                appData.investments.forEach(i => {
+                    if (typeof i.date === 'string') i.date = new Date(i.date);
+                    if (typeof i.lastPayout === 'string') i.lastPayout = new Date(i.lastPayout);
+                });
             } else {
                 // Initialize with some demo data
                 appData.users = [
@@ -1007,8 +1051,8 @@
                 ];
                 
                 appData.transactions = [
-                    { type: 'deposit', amount: 100, date: new Date().toISOString(), status: 'completed' },
-                    { type: 'bonus', amount: 5, date: new Date().toISOString(), status: 'completed' }
+                    { type: 'deposit', amount: 100, date: new Date(), status: 'completed' },
+                    { type: 'bonus', amount: 5, date: new Date(), status: 'completed' }
                 ];
                 
                 saveData();
@@ -1020,6 +1064,10 @@
                 const user = appData.users.find(u => u.email === loggedInUserEmail);
                 if (user) {
                     appData.currentUser = user;
+                    
+                    // Check for daily returns
+                    checkDailyReturns();
+                    
                     showDashboard();
                     return;
                 }
@@ -1165,6 +1213,7 @@
             const email = document.getElementById('signup-email').value;
             const password = document.getElementById('signup-password').value;
             const confirmPassword = document.getElementById('signup-confirm-password').value;
+            const referralCode = document.getElementById('signup-referral').value;
             
             // Validation
             if (!email.endsWith('@gmail.com')) {
@@ -1182,8 +1231,20 @@
                 return;
             }
             
+            // Check referral code
+            let referredBy = null;
+            if (referralCode) {
+                const referrer = appData.users.find(u => u.referralCode === referralCode);
+                if (referrer) {
+                    referredBy = referrer.email;
+                } else {
+                    showNotification('error', 'Error', 'Invalid referral code');
+                    return;
+                }
+            }
+            
             // Create new user
-            const referralCode = generateReferralCode();
+            const newReferralCode = generateReferralCode();
             const newUser = {
                 email,
                 password,
@@ -1194,8 +1255,8 @@
                 binance: '',
                 trc20: '',
                 balance: 5, // $5 welcome bonus
-                referralCode,
-                referredBy: null,
+                referralCode: newReferralCode,
+                referredBy,
                 referralEarnings: 0,
                 referralCount: 0,
                 vipLevel: 0,
@@ -1209,10 +1270,29 @@
             appData.transactions.push({
                 type: 'bonus',
                 amount: 5,
-                date: new Date().toISOString(),
+                date: new Date(),
                 status: 'completed',
                 userId: email
             });
+            
+            // Add referral bonus to referrer if applicable
+            if (referredBy) {
+                const referrer = appData.users.find(u => u.email === referredBy);
+                if (referrer) {
+                    referrer.referralCount += 1;
+                    referrer.referralEarnings += 2.5; // $2.5 referral bonus
+                    referrer.balance += 2.5;
+                    
+                    appData.transactions.push({
+                        type: 'referral',
+                        amount: 2.5,
+                        date: new Date(),
+                        status: 'completed',
+                        userId: referredBy,
+                        referredUser: email
+                    });
+                }
+            }
             
             saveData();
             localStorage.setItem('loggedInUser', email);
@@ -1247,7 +1327,8 @@
             document.getElementById('dashboard-username').textContent = appData.currentUser.name || appData.currentUser.email;
             
             if (appData.currentUser.vipLevel > 0) {
-                document.getElementById('dashboard-vip-badge').style.display = 'inline-block';
+                document.getElementById('dashboard-vip-badge').style.display = 'block';
+                document.getElementById('vip-level').textContent = `VIP ${appData.currentUser.vipLevel}`;
             } else {
                 document.getElementById('dashboard-vip-badge').style.display = 'none';
             }
@@ -1266,30 +1347,34 @@
             
             const userTransactions = appData.transactions
                 .filter(t => !t.userId || t.userId === appData.currentUser.email)
-                .sort((a, b) => new Date(b.date) - new Date(a.date))
+                .sort((a, b) => b.date - a.date)
                 .slice(0, 5);
             
-            userTransactions.forEach(transaction => {
-                const item = document.createElement('div');
-                item.className = 'transaction-item';
-                
-                const leftDiv = document.createElement('div');
-                const rightDiv = document.createElement('div');
-                
-                leftDiv.innerHTML = `
-                    <div class="transaction-type">${transaction.type.charAt(0).toUpperCase() + transaction.type.slice(1)}</div>
-                    <div class="transaction-date">${new Date(transaction.date).toLocaleDateString()}</div>
-                `;
-                
-                rightDiv.innerHTML = `
-                    <div class="transaction-amount ${transaction.type}">$${transaction.amount.toFixed(2)}</div>
-                    <div class="transaction-status">${transaction.status}</div>
-                `;
-                
-                item.appendChild(leftDiv);
-                item.appendChild(rightDiv);
-                transactionList.appendChild(item);
-            });
+            if (userTransactions.length === 0) {
+                transactionList.innerHTML = '<div class="transaction-item">No transactions yet</div>';
+            } else {
+                userTransactions.forEach(transaction => {
+                    const item = document.createElement('div');
+                    item.className = 'transaction-item';
+                    
+                    const leftDiv = document.createElement('div');
+                    const rightDiv = document.createElement('div');
+                    
+                    leftDiv.innerHTML = `
+                        <div class="transaction-type">${transaction.type.charAt(0).toUpperCase() + transaction.type.slice(1)}</div>
+                        <div class="transaction-date">${transaction.date.toLocaleDateString()}</div>
+                    `;
+                    
+                    rightDiv.innerHTML = `
+                        <div class="transaction-amount ${transaction.type}">$${transaction.amount.toFixed(2)}</div>
+                        <div class="transaction-status">${transaction.status}</div>
+                    `;
+                    
+                    item.appendChild(leftDiv);
+                    item.appendChild(rightDiv);
+                    transactionList.appendChild(item);
+                });
+            }
         }
         
         // Copy referral code
@@ -1398,7 +1483,7 @@
                     type: 'deposit',
                     amount,
                     method,
-                    date: new Date().toISOString(),
+                    date: new Date(),
                     status: 'pending',
                     userId: appData.currentUser.email
                 };
@@ -1466,7 +1551,7 @@
             
             const userDeposits = appData.transactions
                 .filter(t => t.type === 'deposit' && (!t.userId || t.userId === appData.currentUser.email))
-                .sort((a, b) => new Date(b.date) - new Date(a.date))
+                .sort((a, b) => b.date - a.date)
                 .slice(0, 5);
             
             if (userDeposits.length === 0) {
@@ -1481,7 +1566,7 @@
                     
                     leftDiv.innerHTML = `
                         <div class="transaction-type">Deposit (${deposit.method})</div>
-                        <div class="transaction-date">${new Date(deposit.date).toLocaleDateString()}</div>
+                        <div class="transaction-date">${deposit.date.toLocaleDateString()}</div>
                     `;
                     
                     rightDiv.innerHTML = `
@@ -1589,7 +1674,7 @@
                     type: 'withdraw',
                     amount,
                     address,
-                    date: new Date().toISOString(),
+                    date: new Date(),
                     status: 'pending',
                     userId: appData.currentUser.email
                 };
@@ -1644,7 +1729,7 @@
             
             const userWithdrawals = appData.transactions
                 .filter(t => t.type === 'withdraw' && (!t.userId || t.userId === appData.currentUser.email))
-                .sort((a, b) => new Date(b.date) - new Date(a.date))
+                .sort((a, b) => b.date - a.date)
                 .slice(0, 5);
             
             if (userWithdrawals.length === 0) {
@@ -1659,7 +1744,7 @@
                     
                     leftDiv.innerHTML = `
                         <div class="transaction-type">Withdrawal</div>
-                        <div class="transaction-date">${new Date(withdrawal.date).toLocaleDateString()}</div>
+                        <div class="transaction-date">${withdrawal.date.toLocaleDateString()}</div>
                     `;
                     
                     rightDiv.innerHTML = `
@@ -1689,32 +1774,46 @@
                     // Deduct from balance
                     appData.currentUser.balance -= packageAmount;
                     
+                    // Calculate daily return
+                    const dailyReturn = calculateDailyReturn(packageAmount);
+                    
                     // Add investment
                     const investment = {
                         amount: packageAmount,
-                        date: new Date().toISOString(),
-                        dailyReturn: calculateDailyReturn(packageAmount),
+                        date: new Date(),
+                        dailyReturn,
+                        lastPayout: new Date(),
                         userId: appData.currentUser.email
                     };
                     
                     appData.investments.push(investment);
                     
-                    // Update VIP level
-                    if (packageAmount >= 1000) {
-                        appData.currentUser.vipLevel = 3;
-                    } else if (packageAmount >= 500) {
-                        appData.currentUser.vipLevel = 2;
-                    } else if (packageAmount >= 100) {
-                        appData.currentUser.vipLevel = 1;
+                    // Determine VIP level
+                    const newVipLevel = determineVipLevel(packageAmount);
+                    appData.currentUser.vipLevel = newVipLevel;
+                    
+                    // Add VIP bonus (immediate bonus)
+                    const vipBonus = packageAmount * (vipLevels[newVipLevel - 1]?.bonus || 0);
+                    if (vipBonus > 0) {
+                        appData.currentUser.balance += vipBonus;
+                        
+                        appData.transactions.push({
+                            type: 'bonus',
+                            amount: vipBonus,
+                            date: new Date(),
+                            status: 'completed',
+                            description: `VIP ${newVipLevel} Signup Bonus`,
+                            userId: appData.currentUser.email
+                        });
                     }
                     
                     saveData();
                     updateDashboard();
                     
-                    showNotification('success', 'Investment Successful', `You've invested $${packageAmount.toFixed(2)} in a VIP package`);
+                    showNotification('success', 'Investment Successful', `You've invested $${packageAmount.toFixed(2)} in a VIP package and received $${vipBonus.toFixed(2)} VIP bonus!`);
                     
-                    // Simulate daily returns
-                    simulateDailyReturns();
+                    // Check for daily returns
+                    checkDailyReturns();
                 });
             });
             
@@ -1727,13 +1826,23 @@
                 return 0.05; // $50 package
             }
             
+            // Determine VIP level based on investment amount
+            function determineVipLevel(amount) {
+                if (amount >= 5000) return 5;
+                if (amount >= 2000) return 4;
+                if (amount >= 1000) return 3;
+                if (amount >= 500) return 2;
+                if (amount >= 100) return 1;
+                return 0;
+            }
+            
             // Load investments
             const investmentList = document.getElementById('investment-list');
             investmentList.innerHTML = '';
             
             const userInvestments = appData.investments
                 .filter(i => !i.userId || i.userId === appData.currentUser.email)
-                .sort((a, b) => new Date(b.date) - new Date(a.date));
+                .sort((a, b) => b.date - a.date);
             
             if (userInvestments.length === 0) {
                 investmentList.innerHTML = '<div class="transaction-item">No active investments</div>';
@@ -1747,7 +1856,7 @@
                     
                     leftDiv.innerHTML = `
                         <div class="transaction-type">VIP Investment</div>
-                        <div class="transaction-date">${new Date(investment.date).toLocaleDateString()}</div>
+                        <div class="transaction-date">${investment.date.toLocaleDateString()}</div>
                     `;
                     
                     rightDiv.innerHTML = `
@@ -1762,25 +1871,52 @@
             }
         }
         
-        // Simulate daily returns (for demo purposes)
-        function simulateDailyReturns() {
-            const investments = appData.investments.filter(i => i.userId === appData.currentUser.email);
+        // Check for daily returns
+        function checkDailyReturns() {
+            if (!appData.currentUser) return;
             
-            investments.forEach(investment => {
-                const returnAmount = investment.amount * investment.dailyReturn;
-                appData.currentUser.balance += returnAmount;
+            const now = new Date();
+            const lastPayout = appData.lastDailyPayout || new Date(0);
+            
+            // Check if 24 hours have passed since last payout
+            if ((now - lastPayout) >= 24 * 60 * 60 * 1000) {
+                const investments = appData.investments.filter(i => i.userId === appData.currentUser.email);
                 
-                appData.transactions.push({
-                    type: 'return',
-                    amount: returnAmount,
-                    date: new Date().toISOString(),
-                    status: 'completed',
-                    userId: appData.currentUser.email
-                });
-            });
-            
-            saveData();
-            updateDashboard();
+                if (investments.length > 0) {
+                    let totalReturns = 0;
+                    
+                    investments.forEach(investment => {
+                        const returnAmount = investment.amount * investment.dailyReturn;
+                        totalReturns += returnAmount;
+                        
+                        // Update last payout time for this investment
+                        investment.lastPayout = now;
+                    });
+                    
+                    if (totalReturns > 0) {
+                        // Add returns to balance
+                        appData.currentUser.balance += totalReturns;
+                        
+                        // Add transaction
+                        appData.transactions.push({
+                            type: 'return',
+                            amount: totalReturns,
+                            date: now,
+                            status: 'completed',
+                            description: 'Daily Investment Returns',
+                            userId: appData.currentUser.email
+                        });
+                        
+                        // Update last payout time
+                        appData.lastDailyPayout = now;
+                        
+                        saveData();
+                        updateDashboard();
+                        
+                        showNotification('success', 'Daily Returns', `You received $${totalReturns.toFixed(2)} in daily returns!`);
+                    }
+                }
+            }
         }
         
         // Initialize profile page
